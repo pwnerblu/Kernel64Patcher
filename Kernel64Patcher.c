@@ -179,6 +179,30 @@ int get_AMFIInitializeLocalSigningPublicKey_patch(void* kernel_buf,size_t kernel
     return 0;
 }
 
+// tested on an ipad 6 on ios 13.7, this was done to avoid wait like 2 or 10 minutes when it is booting
+int disableTouchidSensor(void* kernel_buf, size_t kernel_len) {
+    printf("%s: Entering ...\n",__FUNCTION__);
+
+    addr_t xref_stuff;
+    addr_t beg_func;
+    void *str_stuff;
+
+    printf("[*] Patching AppleBiometricSensor\n");
+    str_stuff = memmem(kernel_buf, kernel_len, "_sepTransactResponse", 21);
+    if (!str_stuff)
+    {
+        printf("[-] Failed to find _sepTransactResponse\n");
+        return -1;
+    }
+    xref_stuff = xref64(kernel_buf, 0, kernel_len, (addr_t)GET_OFFSET(kernel_len, str_stuff));
+    beg_func = bof64(kernel_buf, 0, xref_stuff);
+    *(uint32_t *)(kernel_buf + beg_func) = 0x52800000;
+    *(uint32_t *)(kernel_buf + beg_func + 0x4) = 0xD65F03C0;
+    printf("[+] Patched AppleBiometricSensor\n");
+
+    return 0;
+}
+
 // based on seprmvr, thank you so much mineek, i implemented it because here are linux users. 
 int fuck_the_sep(void* kernel_buf, size_t kernel_len) {
     printf("%s: Entering ...\n",__FUNCTION__);
@@ -874,6 +898,7 @@ int main(int argc, char **argv) {
         printf("\t-t\t\tPatch tfp0\n");
         printf("\t-d\t\tPatch developer mode\n"); 
         printf("\t-k\t\tPatch fuckthesep, based on seprmvr\n");
+        printf("\t-n\t\tPatch to disable touchIdSensor\n");
         return 0;
     }
     
@@ -978,6 +1003,10 @@ int main(int argc, char **argv) {
         if(strcmp(argv[i], "-k") == 0) {
             printf("Kernel: SEP patcher...\n");
             fuck_the_sep(kernel_buf,kernel_len);
+        }
+        if(strcmp(argv[i], "-n") == 0) {
+            printf("Kernel: SEP patcher...\n");
+            disableTouchidSensor(kernel_buf,kernel_len);
         }
     }
     
