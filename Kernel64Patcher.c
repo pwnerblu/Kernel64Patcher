@@ -371,6 +371,76 @@ int fuck_the_sep(void* kernel_buf, size_t kernel_len) {
 
 }
 
+// aslr
+int pathAslr(void* kernel_buf,size_t kernel_len) {
+    
+    printf("%s: Entering ...\n",__FUNCTION__);
+
+    char img4_sig_check_string[7] = "__XHDR";
+    void* ent_loc = memmem(kernel_buf,kernel_len,img4_sig_check_string, 7);
+    if(!ent_loc) {
+        printf("%s: Could not find \"/usr/lib/dyld, OMITING PATCHING...\" string\n",__FUNCTION__);
+        return -1;
+    }
+
+    printf("%s: Found \"/usr/lib/dyld\" str loc at %p\n",__FUNCTION__,GET_OFFSET(kernel_len, ent_loc));
+    addr_t ent_ref = xref64(kernel_buf,0,kernel_len,(addr_t)GET_OFFSET(kernel_len, ent_loc));
+    if(!ent_ref) {
+        printf("%s: Could not find \"/usr/lib/dyld\" xref\n",__FUNCTION__);
+        return -1;
+    }
+    
+    printf("%s: Found \"/usr/lib/dyld\" xref at %p\n",__FUNCTION__,(void*)ent_ref);
+    addr_t start_func = bof64(kernel_buf,0, ent_ref);
+    if(!start_func) {
+        printf("%s: Could not find load load_code_signature start\n",__FUNCTION__);
+        return -1;
+    }
+
+    // check for ios 15
+    uint32_t tbnz1_ref = step64_back(kernel_buf, (start_func + 0x374), 150 * 4, 0x36000000, 0x7E000000);
+    uint32_t instMemValToCheck = *((uint32_t *)(kernel_buf + (tbnz1_ref - 0x4))); // on ios 15 before the tbnz function it has the ldrb function that we need to path
+
+    if (instMemValToCheck == 0x394122C8)
+    {
+        printf("ios 15 Detected!\n");
+        printf("%s: Patched ldrb    w8, [x22, #0x48] to mov x8, #0x20 at %p\n",__FUNCTION__, (void*) tbnz1_ref);
+        *((uint32_t *)(kernel_buf + (tbnz1_ref - 0x4))) = 0xD2800408;
+        return 0;
+    }
+    
+    ent_ref = xref64code(kernel_buf,0,(addr_t)GET_OFFSET(kernel_len, start_func), start_func);
+    if(!ent_ref) {
+        printf("%s: Could not find load_code_signature xref to load_machfile\n",__FUNCTION__);
+        return -1;
+    }
+    printf("%s: Found function xref at %p\n",__FUNCTION__,(void*)ent_ref);
+
+    addr_t tbnz_ref = step64_back(kernel_buf, ent_ref, 150 * 4, 0x36000000, 0x7E000000);
+    if(!tbnz_ref) {
+        printf("%s: Could not find tbnz\n",__FUNCTION__);
+        return -1;
+    }
+    printf("%s: Found tbnz at %p\n",__FUNCTION__, (void*) tbnz_ref);
+    uint32_t memValToCheck = *((uint32_t *)(kernel_buf + (tbnz_ref - 0x8)));
+    uint32_t memValToCheck13 = *((uint32_t *)(kernel_buf + (tbnz_ref - 0x4))); // ios 13 is 4 bytes before
+
+    if ((! (memValToCheck == 0x394122c8)) && (! (memValToCheck == 0xD2800408)) && ((! (memValToCheck13 == 0x394122C8)) && (! (memValToCheck13 == 0xD2800408)))) {
+        printf("\n it doesn't look like we are on load_machfile func\n");
+        return 0;
+    } else if (memValToCheck == 0xD2800408) {
+        printf("Detected, ASLR was already patched Omitting\n");
+        return 0;
+    } else if (memValToCheck == 0x394122c8) {
+        *((uint32_t *)(kernel_buf + (tbnz_ref - 0x8))) = 0xD2800408; // ios 14 the ldrb instruction to path is 8 byte before the tbnz
+    } else if (memValToCheck13 == 0x394122C8) {
+        *((uint32_t *)(kernel_buf + (tbnz_ref - 0x4))) = 0xD2800408; // ios 13 the ldrb instruction to path is 4 byte before the tbnz
+    }
+
+    printf("%s: Patched ldrb    w8, [x22, #0x48] at %p\n",__FUNCTION__, (void*) tbnz_ref);
+    return 0;
+}
+
 // load firmware which are not signed like AOP.img4, Homer.img4, etc. ios 15
 int bypassFirmwareValidate15(void* kernel_buf,size_t kernel_len) {
 
@@ -899,6 +969,7 @@ int main(int argc, char **argv) {
         printf("\t-d\t\tPatch developer mode\n"); 
         printf("\t-k\t\tPatch fuckthesep, based on seprmvr\n");
         printf("\t-n\t\tPatch to disable touchIdSensor\n");
+        printf("\t-c\t\tPatch to Disable ASLR\n");
         return 0;
     }
     
@@ -958,7 +1029,7 @@ int main(int argc, char **argv) {
             printf("Kernel: Adding tbypassFirmwareValidate patch...\n");
             bypassFirmwareValidate13(kernel_buf,kernel_len);
         }
-        
+
         if(strcmp(argv[i], "-b15") == 0) {
             printf("Kernel: Adding tbypassFirmwareValidate patch...\n");
             bypassFirmwareValidate15(kernel_buf,kernel_len);
@@ -1005,8 +1076,12 @@ int main(int argc, char **argv) {
             fuck_the_sep(kernel_buf,kernel_len);
         }
         if(strcmp(argv[i], "-n") == 0) {
-            printf("Kernel: SEP patcher...\n");
+            printf("Kernel: touch id patcher...\n");
             disableTouchidSensor(kernel_buf,kernel_len);
+        }
+        if(strcmp(argv[i], "-c") == 0) {
+            printf("Kernel: Adding ASLR patch...\n");
+            pathAslr(kernel_buf,kernel_len);
         }
     }
     
