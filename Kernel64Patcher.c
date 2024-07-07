@@ -443,6 +443,54 @@ int pathAslr(void* kernel_buf,size_t kernel_len) {
     return 0;
 }
 
+size_t find_pattern(const unsigned char *buffer, size_t buflen, const unsigned char *pattern, const unsigned char *mask, size_t pattern_len) {
+    size_t i, j;
+
+    for (i = 0; i < buflen - pattern_len + 1; ++i) {
+        for (j = 0; j < pattern_len; ++j) {
+            if ((buffer[i + j] & mask[j]) != (pattern[j] & mask[j])) {
+                break;
+            }
+        }
+        if (j == pattern_len) {
+            printf("Pattern found at offset: %zu\n", i);
+            //printf("value in hexadecimal: %p\n", (void *)buffer[i]);
+            return i;
+        }
+    }
+    return 0; // Return 0 if pattern is not found
+}
+
+int pathPtrace(void* kernel_buf,size_t kernel_len) {
+    printf("looking for the bytes in %p\n", kernel_buf);
+    unsigned char pattern[] = { 0xB3, 0x62, 0x01, 0x91, 0xE0, 0x03, 0x13, 0xAA, 0x35, 0x7B, 0xF3, 0x97, 0xA8, 0x6A, 0x42, 0xB9, 0x68, 0x29, 0x50, 0x37 };
+    unsigned char mask[]    = { 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x0F, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xF0, 0xFF };
+    
+    /*
+        add x19, x21, #0x58
+        mov x0, x19
+        bl #0xffffffffffcdecdc // pc + 0xffffffffffcdecdc
+        ldr w8, [x21, #0x268]
+        tbnz w8, #0xa, #0x53c // pc + 0x53c
+    */
+
+    size_t pattern_len = sizeof(pattern);
+    size_t buffer = find_pattern(kernel_buf, kernel_len, pattern, mask, pattern_len);
+
+    if (buffer == 0) {
+        printf("We couldn't found the bytes of ptrace path\n");
+        return -1;
+    }
+    
+    //printf("Byte value at address %p: 0x%02X\n", (void *)(kernel_buf + buffer), *(unsigned char *)(kernel_buf + buffer + 12));
+    *(uint32_t *) (kernel_buf + buffer + 12) = 0x52800000;
+    *(uint32_t *) (kernel_buf + buffer + 16) = 0xd503201f; // 1F2003D5
+
+    printf("Patching \"ptrace debugger method\"\n\n");
+
+    return 0;
+}
+
 // load firmware which are not signed like AOP.img4, Homer.img4, etc. ios 15
 int bypassFirmwareValidate15(void* kernel_buf,size_t kernel_len) {
 
@@ -967,11 +1015,13 @@ int main(int argc, char **argv) {
         printf("\t-p\t\tPatch AMFIInitializeLocalSigningPublicKey (iOS 15 Only)\n");
         printf("\t-h\t\tPatch is_root_hash_authentication_required_ios (iOS 16 only)\n");
         printf("\t-l\t\tPatch launchd path\n");
-        printf("\t-t\t\tPatch tfp0\n");
+        //printf("\t-t\t\tPatch tfp0\n");
         printf("\t-d\t\tPatch developer mode\n"); 
         printf("\t-k\t\tPatch fuckthesep, based on seprmvr\n");
         printf("\t-n\t\tPatch to disable touchIdSensor\n");
         printf("\t-c\t\tPatch to Disable ASLR\n");
+        printf("\t-t\t\tPatch to Disable Debugger Detection by patching Ptrace\n");
+
         return 0;
     }
     
@@ -1065,11 +1115,11 @@ int main(int argc, char **argv) {
         if(strcmp(argv[i], "-l") == 0) {
             printf("Kernel: Adding launchd patch...\n");
             launchd_path_patch(kernel_buf,kernel_len);
-        }
+        }/*
         if(strcmp(argv[i], "-t") == 0) {
             printf("Kernel: Adding tfp0 patch...\n");
             tfp0_patch(kernel_buf,kernel_len);
-        }
+        }*/
          if(strcmp(argv[i], "-d") == 0) {
             printf("Kernel: Adding force developer mode patch...\n");
             force_developer_mode(kernel_buf,kernel_len);
@@ -1085,6 +1135,10 @@ int main(int argc, char **argv) {
         if(strcmp(argv[i], "-c") == 0) {
             printf("Kernel: Adding ASLR patch...\n");
             pathAslr(kernel_buf,kernel_len);
+        }
+        if(strcmp(argv[i], "-t") == 0) {
+            printf("Kernel: Adding ptrace Debugger Detection patch...\n");
+            pathPtrace(kernel_buf,kernel_len);
         }
     }
     
