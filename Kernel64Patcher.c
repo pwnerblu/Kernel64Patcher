@@ -379,18 +379,18 @@ int pathAslr(void* kernel_buf,size_t kernel_len) {
     char img4_sig_check_string[7] = "__XHDR";
     void* ent_loc = memmem(kernel_buf,kernel_len,img4_sig_check_string, 7);
     if(!ent_loc) {
-        printf("%s: Could not find \"/usr/lib/dyld, OMITING PATCHING...\" string\n",__FUNCTION__);
+        printf("%s: Could not find \"__XHDR, OMITING PATCHING...\" string\n",__FUNCTION__);
         return -1;
     }
 
-    printf("%s: Found \"/usr/lib/dyld\" str loc at %p\n",__FUNCTION__,GET_OFFSET(kernel_len, ent_loc));
+    printf("%s: Found \"__XHDR\" str loc at %p\n",__FUNCTION__,GET_OFFSET(kernel_len, ent_loc));
     addr_t ent_ref = xref64(kernel_buf,0,kernel_len,(addr_t)GET_OFFSET(kernel_len, ent_loc));
     if(!ent_ref) {
-        printf("%s: Could not find \"/usr/lib/dyld\" xref\n",__FUNCTION__);
+        printf("%s: Could not find \"__XHDR\" xref\n",__FUNCTION__);
         return -1;
     }
     
-    printf("%s: Found \"/usr/lib/dyld\" xref at %p\n",__FUNCTION__,(void*)ent_ref);
+    printf("%s: Found \"__XHDR\" xref at %p\n",__FUNCTION__,(void*)ent_ref);
     addr_t start_func = bof64(kernel_buf,0, ent_ref);
     if(!start_func) {
         printf("%s: Could not find load load_code_signature start\n",__FUNCTION__);
@@ -422,19 +422,21 @@ int pathAslr(void* kernel_buf,size_t kernel_len) {
         return -1;
     }
     printf("%s: Found tbnz at %p\n",__FUNCTION__, (void*) tbnz_ref);
-    uint32_t memValToCheck = *((uint32_t *)(kernel_buf + (tbnz_ref - 0x8)));
-    uint32_t memValToCheck13 = *((uint32_t *)(kernel_buf + (tbnz_ref - 0x4))); // ios 13 is 4 bytes before
-
-    if ((! (memValToCheck == 0x394122c8)) && (! (memValToCheck == 0xD2800408)) && ((! (memValToCheck13 == 0x394122C8)) && (! (memValToCheck13 == 0xD2800408)))) {
-        printf("\n it doesn't look like we are on load_machfile func\n");
-        return 0;
-    } else if (memValToCheck == 0xD2800408) {
+    uint32_t memValToCheck = *((uint32_t *)(kernel_buf + (tbnz_ref - 0x8))); // ios 14 is 8 bytes before
+    uint32_t memValToCheck4 = *((uint32_t *)(kernel_buf + (tbnz_ref - 0x4))); // ios 13 is 4 bytes before
+    
+    if ((memValToCheck == 0xd2800408) || (memValToCheck4 == 0xd2800419) || (memValToCheck4 == 0xd2800408)) {
         printf("Detected, ASLR was already patched Omitting\n");
         return 0;
     } else if (memValToCheck == 0x394122c8) {
-        *((uint32_t *)(kernel_buf + (tbnz_ref - 0x8))) = 0xD2800408; // ios 14 the ldrb instruction to path is 8 byte before the tbnz
-    } else if (memValToCheck13 == 0x394122C8) {
-        *((uint32_t *)(kernel_buf + (tbnz_ref - 0x4))) = 0xD2800408; // ios 13 the ldrb instruction to path is 4 byte before the tbnz
+        *((uint32_t *)(kernel_buf + (tbnz_ref - 0x8))) = 0xd2800408; // ios 14 the ldrb instruction to path is 8 byte before the tbnz
+    } else if (memValToCheck4 == 0x394122c8) {
+        *((uint32_t *)(kernel_buf + (tbnz_ref - 0x4))) = 0xd2800408; // ios 13 the ldrb instruction to path is 4 byte before the tbnz
+    } else if (memValToCheck4 == 0xb9404a99) {
+        *((uint32_t *)(kernel_buf + (tbnz_ref - 0x4))) = 0xd2800419; // ios 11 the ldr instruction to path is 4 byte before the tbnz and it uses w25.
+    } else {
+        printf("we couldn't find the instruction to path");
+        return -1;
     }
 
     printf("%s: Patched ldrb    w8, [x22, #0x48] at %p\n",__FUNCTION__, (void*) tbnz_ref);
@@ -987,6 +989,7 @@ int main(int argc, char **argv) {
     fseek(fp, 0, SEEK_SET);
     
     kernel_buf = (void*)malloc(kernel_len);
+
     if(!kernel_buf) {
         printf("%s: Out of memory!\n", __FUNCTION__);
         fclose(fp);
