@@ -463,10 +463,15 @@ size_t find_pattern(const unsigned char *buffer, size_t buflen, const unsigned c
 
 int pathPtrace(void* kernel_buf,size_t kernel_len) {
     printf("looking for the bytes in %p\n", kernel_buf);
-    unsigned char pattern[] = { 0xB3, 0x62, 0x01, 0x91, 0xE0, 0x03, 0x13, 0xAA, 0x35, 0x7B, 0xF3, 0x97, 0xA8, 0x6A, 0x42, 0xB9, 0x68, 0x29, 0x50, 0x37 };
-    unsigned char mask[]    = { 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x0F, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xF0, 0xFF };
+    unsigned char pattern[] = { 0xB3, 0x62, 0x01, 0x91, 0xE0, 0x03, 0x13, 0xAA, 0x35, 0x7B, 0xF3, 0x97, 0xA8, 0x6A, 0x42, 0xB9, 0x68, 0x29, 0x50, 0x37, 0x08, 0x01, 0x14, 0x32 }; // ios 15
+    unsigned char mask[]    = { 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x0F, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xF0, 0x00, 0xF0, 0xFF, 0x0F, 0x00, 0xF0, 0xFF, 0x00, 0x00, 0xFF, 0xFF };
     
-    /*
+    unsigned char pattern14[] = { 0xE0, 0x03, 0x15, 0xAA, 0x02, 0x00, 0x80, 0x52, 0x08, 0x11, 0xF4, 0x97, 0x88, 0x4A, 0x41, 0xB9, 0xA8, 0xFC, 0x57, 0x37, 0xE0, 0x03, 0x16, 0xAA }; // E00316AA
+    unsigned char mask14[] =    { 0xF0, 0xFF, 0xF0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0xFF, 0xF0, 0x00, 0xF0, 0xFF, 0x00, 0xFF, 0xF0, 0xFF };
+
+    unsigned char pattern13[] = { 0xE0, 0x03, 0x15, 0xAA, 0x02, 0x00, 0x80, 0x52, 0x08, 0x11, 0xF4, 0x97, 0x88, 0x4A, 0x41, 0xB9, 0xA8, 0xFC, 0x57, 0x37, 0x08, 0x01, 0x14, 0x32 };
+    unsigned char mask13[] =    { 0xF0, 0xFF, 0xF0, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xF0, 0xFF, 0xF0, 0x00, 0xF0, 0xFF, 0x00, 0xFF, 0xFF, 0xFF };
+    /* // ios 15
         add x19, x21, #0x58
         mov x0, x19
         bl #0xffffffffffcdecdc // pc + 0xffffffffffcdecdc
@@ -477,18 +482,48 @@ int pathPtrace(void* kernel_buf,size_t kernel_len) {
     size_t pattern_len = sizeof(pattern);
     size_t buffer = find_pattern(kernel_buf, kernel_len, pattern, mask, pattern_len);
 
-    if (buffer == 0) {
-        printf("We couldn't found the bytes of ptrace path\n");
-        return -1;
+    if (buffer != 0) {
+        //printf("Byte value at address %p: 0x%02X\n", (void *)(kernel_buf + buffer), *(unsigned char *)(kernel_buf + buffer + 12));
+        *(uint32_t *) (kernel_buf + buffer + 12) = 0x52800008;
+        *(uint32_t *) (kernel_buf + buffer + 16) = 0xd503201f;
+
+        printf("Patching \"ptrace debugger method\"\n\n");
+        return 0;
+    } else {
+        printf("We couldn't found the bytes of ptrace path, we are going to try with bytes for ios 14\n");
     }
     
-    //printf("Byte value at address %p: 0x%02X\n", (void *)(kernel_buf + buffer), *(unsigned char *)(kernel_buf + buffer + 12));
-    *(uint32_t *) (kernel_buf + buffer + 12) = 0x52800000;
-    *(uint32_t *) (kernel_buf + buffer + 16) = 0xd503201f; // 1F2003D5
+    size_t pattern_len14 = sizeof(pattern14);
+    buffer = find_pattern(kernel_buf, kernel_len, pattern14, mask14, pattern_len14);
 
-    printf("Patching \"ptrace debugger method\"\n\n");
+    if (buffer != 0) {
+        *(uint32_t *) (kernel_buf + buffer + 12) = 0x52800008;
+        *(uint32_t *) (kernel_buf + buffer + 16) = 0xd503201f;
 
-    return 0;
+        printf("Patching \"ptrace debugger method\"\n\n");
+        return 0;
+    } else {
+        printf("We couldn't found the bytes of ptrace path for ios 14, we are going to try with bytes for ios 13\n");
+    }
+
+
+
+    size_t pattern_len13 = sizeof(pattern13);
+    buffer = find_pattern(kernel_buf, kernel_len, pattern13, mask13, pattern_len13);
+
+    if (buffer != 0) {
+
+    *(uint32_t *) (kernel_buf + buffer + 12) = 0x52800008;
+    *(uint32_t *) (kernel_buf + buffer + 16) = 0xd503201f;
+    *(uint32_t *) (kernel_buf + buffer - 0x64) = 0x52800008;
+
+        printf("Patching \"ptrace debugger method\"\n\n");
+        return 0;
+    } else {
+        printf("We couldn't found the bytes of ptrace path for ios 13\n");
+    }
+
+    return -1;
 }
 
 // load firmware which are not signed like AOP.img4, Homer.img4, etc. ios 15
