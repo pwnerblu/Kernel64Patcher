@@ -497,8 +497,8 @@ int pathPtrace(void* kernel_buf,size_t kernel_len) {
     buffer = find_pattern(kernel_buf, kernel_len, pattern14, mask14, pattern_len14);
 
     if (buffer != 0) {
-        *(uint32_t *) (kernel_buf + buffer + 12) = 0x52800008;
-        *(uint32_t *) (kernel_buf + buffer + 16) = 0xd503201f;
+        *(uint32_t *) (kernel_buf + buffer - 0x70) = 0xd2800000;
+        *(uint32_t *) (kernel_buf + buffer - 0x6C) = 0x14000025; // b 0x94 to return correctly
 
         printf("Patching \"ptrace debugger method\"\n\n");
         return 0;
@@ -513,9 +513,8 @@ int pathPtrace(void* kernel_buf,size_t kernel_len) {
 
     if (buffer != 0) {
 
-    *(uint32_t *) (kernel_buf + buffer + 12) = 0x52800008;
-    *(uint32_t *) (kernel_buf + buffer + 16) = 0xd503201f;
-    *(uint32_t *) (kernel_buf + buffer - 0x64) = 0x52800008;
+        *(uint32_t *) (kernel_buf + buffer - 0x8C) = 0xd2800000;
+        *(uint32_t *) (kernel_buf + buffer - 0x88) = 0x140000ac; // b 0x2B0 to return correctly
 
         printf("Patching \"ptrace debugger method\"\n\n");
         return 0;
