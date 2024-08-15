@@ -525,6 +525,25 @@ int pathPtrace(void* kernel_buf,size_t kernel_len) {
     return -1;
 }
 
+int panic007Path(void* kernel_buf,size_t kernel_len) {
+    unsigned char pattern[] = { 0x2a, 0x7d, 0x09, 0x53, 0x4a, 0x01, 0x1c, 0x12, 0x2b, 0x79, 0x1f, 0x53, 0x6b, 0x01, 0x15, 0x12, 0x68, 0x01, 0x08, 0x2a, 0x08, 0x01, 0x0a, 0x2a};
+    unsigned char mask[]    = { 0x00, 0x00, 0xff, 0xff, 0x00, 0x00, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff, 0x00, 0xff, 0xff, 0xff, 0x00, 0xff, 0xf0, 0xff, 0x00, 0xff, 0xf0, 0xff };
+    
+    size_t pattern_len = sizeof(pattern);
+    size_t buffer = 0x0;
+    buffer = find_pattern(kernel_buf, kernel_len, pattern, mask, pattern_len);
+    
+    if (buffer == 0) {
+        printf("We couldn't found the bytes of panic007 path\n");
+        return -1;
+    }
+
+    *(uint32_t *) (kernel_buf + buffer + 0x10) = 0xd503201f;
+    
+    printf("panic007 path applied\n");
+    return 0;
+}
+
 // load firmware which are not signed like AOP.img4, Homer.img4, etc. ios 15
 int bypassFirmwareValidate15(void* kernel_buf,size_t kernel_len) {
 
@@ -1173,6 +1192,10 @@ int main(int argc, char **argv) {
         if(strcmp(argv[i], "-t") == 0) {
             printf("Kernel: Adding ptrace Debugger Detection patch...\n");
             pathPtrace(kernel_buf,kernel_len);
+        }
+        if(strcmp(argv[i], "-v") == 0) {
+            printf("Kernel: Adding panic007 patch...\n");
+            panic007Path(kernel_buf,kernel_len);
         }
     }
     
