@@ -541,6 +541,38 @@ int panic007Path(void* kernel_buf,size_t kernel_len) {
     *(uint32_t *) (kernel_buf + buffer + 0x10) = 0xd503201f;
     
     printf("panic007 path applied\n");
+}
+
+int pathSnapshot(void* kernel_buf,size_t kernel_len) { // ios 15.8.2 iphone8,1 kernel
+
+    printf("%s: Entering ...\n",__FUNCTION__);
+
+    const char failed_to_jhash_insert[] = "%s:%d: %s failed to jhash_insert the root inode, error %d";
+    void* ent_loc = memmem(kernel_buf,kernel_len,failed_to_jhash_insert,strlen(failed_to_jhash_insert));
+    if(!ent_loc) {
+        printf("%s: Could not find \"Failed to jhash_insert the root inode\" string\n",__FUNCTION__);
+        return -1;
+    }
+
+    printf("%s: Found \"Failed to jhash_insert the root inode\" str loc at %p\n",__FUNCTION__,GET_OFFSET(kernel_len,ent_loc));
+    addr_t ent_ref = xref64(kernel_buf,0,kernel_len,(addr_t)GET_OFFSET(kernel_len, ent_loc));
+
+    if(!ent_ref) {
+        printf("%s: Could not find \"apfs_vfsop_mount\" xref\n",__FUNCTION__);
+        return -1;
+    }
+    
+    printf("%s: Found \"apfs_vfsop_mount call to Failed to jhash_insert the root inode str\" xref at %p\n",__FUNCTION__,(void*)ent_ref);
+
+    printf("%s: Patching \"snapshot\" at %p\n\n", __FUNCTION__,(void*)(ent_ref + 0x14));
+    
+    uint32_t instMemValToCheck = *((uint32_t *)(kernel_buf + (ent_ref + 0x14))); // on ios 15 should be ldr w8, [sp, #0x80]
+    if (instMemValToCheck != 0xb94083e8) {// e88340b9
+        printf("[!] couldn't found the correct instruction to path snapshot at");
+        return 0;
+    }
+
+    *(uint32_t *) (kernel_buf + ent_ref + 0x14) = 0xd2800008;
     return 0;
 }
 
@@ -1070,7 +1102,8 @@ int main(int argc, char **argv) {
         printf("\t-l\t\tPatch launchd path\n");
         //printf("\t-t\t\tPatch tfp0\n");
         printf("\t-d\t\tPatch developer mode\n"); 
-        printf("\t-k\t\tPatch fuckthesep, based on seprmvr\n");
+        //printf("\t-k\t\tPatch fuckthesep, based on seprmvr\n");
+        printf("\t-g\t\tPatch to Disable snapshots\n");
         printf("\t-n\t\tPatch to disable touchIdSensor\n");
         printf("\t-c\t\tPatch to Disable ASLR\n");
         printf("\t-t\t\tPatch to Disable Debugger Detection by patching Ptrace\n");
@@ -1196,6 +1229,10 @@ int main(int argc, char **argv) {
         if(strcmp(argv[i], "-v") == 0) {
             printf("Kernel: Adding panic007 patch...\n");
             panic007Path(kernel_buf,kernel_len);
+        }
+        if(strcmp(argv[i], "-g") == 0) {
+            printf("Kernel: Adding snapshot patch patch...\n");
+            pathSnapshot(kernel_buf,kernel_len);
         }
     }
     
