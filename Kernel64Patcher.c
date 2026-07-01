@@ -611,14 +611,14 @@ int bypassFirmwareValidate(void* kernel_buf,size_t kernel_len) {
     char img4_sig_check_string[55] = "Img4DecodePerformTrustEvaluationWithCallbacks: [%d %s]";
     void* found = memmem(kernel_buf,kernel_len,img4_sig_check_string,54);
     if(!found) {
-        printf("%s: Could not find \"%%s::%%s() Img4DecodePerformTrustEvaluationWithCallbacks, OMITING PATCHING...\" string\n",__FUNCTION__);
+        printf("%s: Could not find \"%%s::%%s() Img4DecodePerformTrustEvaluationWithCallbacks\" string\n",__FUNCTION__);
         return -1;
     }
 
     char img4_wrapped_Image4_payload[27] = "trust evaluation succeeded";
     void* ent_loc = memmem(kernel_buf,kernel_len,img4_wrapped_Image4_payload,26);
     if(!ent_loc) {
-        printf("%s: Could not find \"wrapped Image4 payload\" string\n",__FUNCTION__);
+        printf("%s: Could not find \"trust evaluation succeeded\" string\n",__FUNCTION__);
         return -1;
     }
 
@@ -626,13 +626,31 @@ int bypassFirmwareValidate(void* kernel_buf,size_t kernel_len) {
     addr_t ent_ref = xref64(kernel_buf,0,kernel_len,(addr_t)GET_OFFSET(kernel_len, ent_loc));
 
     if(!ent_ref) {
-        printf("%s: Could not find \"%%s::%%s() wrapped Image4 payload\" xref\n",__FUNCTION__);
+        printf("%s: Could not find \"trust evaluation succeeded\" xref\n",__FUNCTION__);
         return -1;
     }
-    printf("%s: Found \"wrapped Image4 payload\" xref at %p\n",__FUNCTION__,(void*)ent_ref);
+    printf("%s: Found \"trust evaluation succeeded\" xref at %p\n",__FUNCTION__,(void*)ent_ref);
 
-    printf("%s: Patching \"wrapped Image4 payload\" at %p\n\n", __FUNCTION__,(void*)(ent_ref - 0x20));
-    *(uint32_t *) (kernel_buf + ent_ref - 0x20) = 0xd503201f;
+    // Search backward for the BL (branch-and-link) to the validation function
+    addr_t validation_bl = step64_back(kernel_buf, ent_ref, 100 * 4, 0xFC000000, 0xFC000000); // BL mask
+    if(!validation_bl) {
+        printf("%s: Could not find validation BL, trying conditional branch\n",__FUNCTION__);
+        // Try to find a CBZ/CBNZ that gates the error path instead
+        addr_t cbz_ref = step64_back(kernel_buf, ent_ref, 50 * 4, 0x34000000, 0x7E000000);
+        if(cbz_ref) {
+            printf("%s: Found conditional branch at %p, NOPing it\n",__FUNCTION__,(void*)cbz_ref);
+            *(uint32_t *)(kernel_buf + cbz_ref) = 0xd503201f;
+            return 0;
+        }
+        printf("%s: Could not find any viable patch point\n",__FUNCTION__);
+        return -1;
+    }
+
+    printf("%s: Found validation call at %p\n",__FUNCTION__,(void*)validation_bl);
+    
+    // NOP out the BL (replace with NOP so it skips the validation call entirely)
+    printf("%s: NOPing validation call at %p\n",__FUNCTION__,(void*)validation_bl);
+    *(uint32_t *)(kernel_buf + validation_bl) = 0xd503201f;
 
     return 0;
 }
@@ -1043,7 +1061,7 @@ int tfp0_patch(void* kernel_buf,size_t kernel_len) {
     
     *(uint32_t *)(kernel_buf + caller_equals_victim) = 0xEB1F03FF;
     return 0;
-}rootfs_rw;
+};
 
 int force_developer_mode(void* kernel_buf,size_t kernel_len) {
     char devmode_status_string[sizeof("AMFI: trying to get developer mode status from ACM\n")] = "AMFI: trying to get developer mode status from ACM\n";
