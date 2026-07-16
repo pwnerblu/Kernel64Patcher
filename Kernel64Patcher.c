@@ -196,8 +196,8 @@ int disableTouchidSensor(void* kernel_buf, size_t kernel_len) {
     }
     xref_stuff = xref64(kernel_buf, 0, kernel_len, (addr_t)GET_OFFSET(kernel_len, str_stuff));
     beg_func = bof64(kernel_buf, 0, xref_stuff);
-    *(uint32_t *)(kernel_buf + beg_func) = 0x52800000;
-    *(uint32_t *)(kernel_buf + beg_func + 0x4) = 0xD65F03C0;
+    *(uint32_t *)(kernel_buf + beg_func) = 0x52800000; // mov w0, #0
+    *(uint32_t *)(kernel_buf + beg_func + 0x4) = 0xD65F0FFF; // retab
     printf("[+] Patched AppleBiometricSensor\n");
 
     return 0;
