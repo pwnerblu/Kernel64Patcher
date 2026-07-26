@@ -899,6 +899,81 @@ int get_unencrypted_data_volume_patch(void* kernel_buf,size_t kernel_len) {
     return 0;
 }
 
+// NEW: Patch virtual bool AppleSEPManager::start(IOService *)
+int get_sepmanager_patch(void* kernel_buf,size_t kernel_len) {
+    printf("%s: Entering ...\n",__FUNCTION__);
+
+    // Patch AssertMacros error messages
+    printf("%s: Patching AssertMacros errors...\n",__FUNCTION__);
+    
+    char assertmacros_string[sizeof("ERROR: %s: AssertMacros: %s (value = 0x%lx), %s file: %s, line: %d")] = "ERROR: %s: AssertMacros: %s (value = 0x%lx), %s file: %s, line: %d";
+    unsigned char *assertmacros_loc = memmem(kernel_buf, kernel_len, assertmacros_string, sizeof("ERROR: %s: AssertMacros: %s (value = 0x%lx), %s file: %s, line: %d") - 1);
+    
+    if(!assertmacros_loc) {
+        printf("%s: Could not find AssertMacros string, continuing...\n", __FUNCTION__);
+        return 0;
+    }
+    
+    printf("%s: Found AssertMacros string at %p\n", __FUNCTION__, GET_OFFSET(kernel_len, assertmacros_loc));
+    
+    addr_t assertmacros_ref = xref64(kernel_buf, 0, kernel_len, (addr_t)GET_OFFSET(kernel_len, assertmacros_loc));
+    if(!assertmacros_ref) {
+        printf("%s: Could not find AssertMacros xref, continuing...\n",__FUNCTION__);
+        return 0;
+    }
+    printf("%s: Found AssertMacros xref at %p\n",__FUNCTION__, (void*) assertmacros_ref);
+    
+    // Find the function start for this error handler
+    addr_t assertmacros_func_start = bof64(kernel_buf, 0, assertmacros_ref);
+    if(!assertmacros_func_start) {
+        printf("%s: Could not find AssertMacros function start, continuing...\n",__FUNCTION__);
+        return 0;
+    }
+    printf("%s: Found AssertMacros function start at %p\n",__FUNCTION__, (void*) assertmacros_func_start);
+    
+    // Patch to return false immediately
+    printf("%s: Patching AssertMacros function at %p to return false\n",__FUNCTION__, (void*) assertmacros_func_start);
+    *(uint32_t *)(kernel_buf + assertmacros_func_start) = 0xd2800000;      // mov w0, #0
+    *(uint32_t *)(kernel_buf + assertmacros_func_start + 0x4) = 0xD65F0FFF; // retab (ARM64e)
+    printf("%s: Patched AssertMacros function - now returns false immediately\n",__FUNCTION__);
+
+    // Patch AppleKeyStore operation failed
+    printf("%s: Patching AppleKeyStore operation failed...\n",__FUNCTION__);
+    
+    char applekeystore_string[sizeof("%s%s:%s%s%s%s%u:%s%u:%s operation %s(sel: %d ret: %x%s)%s")] = "%s%s:%s%s%s%s%u:%s%u:%s operation %s(sel: %d ret: %x%s)%s";
+    unsigned char *applekeystore_loc = memmem(kernel_buf, kernel_len, applekeystore_string, sizeof("%s%s:%s%s%s%s%u:%s%u:%s operation %s(sel: %d ret: %x%s)%s") - 1);
+    
+    if(!applekeystore_loc) {
+        printf("%s: Could not find AppleKeyStore operation string, continuing...\n", __FUNCTION__);
+        return 0;
+    }
+    
+    printf("%s: Found AppleKeyStore operation string at %p\n", __FUNCTION__, GET_OFFSET(kernel_len, applekeystore_loc));
+    
+    addr_t applekeystore_ref = xref64(kernel_buf, 0, kernel_len, (addr_t)GET_OFFSET(kernel_len, applekeystore_loc));
+    if(!applekeystore_ref) {
+        printf("%s: Could not find AppleKeyStore operation xref, continuing...\n",__FUNCTION__);
+        return 0;
+    }
+    printf("%s: Found AppleKeyStore operation xref at %p\n",__FUNCTION__, (void*) applekeystore_ref);
+    
+    // Find the function start for this error handler
+    addr_t applekeystore_func_start = bof64(kernel_buf, 0, applekeystore_ref);
+    if(!applekeystore_func_start) {
+        printf("%s: Could not find AppleKeyStore function start, continuing...\n",__FUNCTION__);
+        return 0;
+    }
+    printf("%s: Found AppleKeyStore function start at %p\n",__FUNCTION__, (void*) applekeystore_func_start);
+    
+    // Patch to return false immediately (operation success = 0)
+    printf("%s: Patching AppleKeyStore function at %p to return false\n",__FUNCTION__, (void*) applekeystore_func_start);
+    *(uint32_t *)(kernel_buf + applekeystore_func_start) = 0xd2800000;      // mov w0, #0
+    *(uint32_t *)(kernel_buf + applekeystore_func_start + 0x4) = 0xD65F0FFF; // retab (ARM64e)
+    printf("%s: Patched AppleKeyStore function - now returns false immediately\n",__FUNCTION__);
+    
+    return 0;
+}
+
 int get_update_rootfs_rw_patch(void* kernel_buf,size_t kernel_len) {
 
     printf("%s: Entering ...\n", __FUNCTION__);
@@ -1152,6 +1227,7 @@ int main(int argc, char **argv) {
         printf("\t-e\t\tPatch root volume seal is broken (iOS 15 Only)\n");
         printf("\t-u\t\tPatch update_rootfs_rw (iOS 15 Only)\n");
         printf("\t-ue\t\tPatch unencrypted data volume is not allowed (iOS 15 Only)\n");
+        printf("\t-sep\t\tDisable AppleSEPManager::start() to prevent SEP initialization\n");
         printf("\t-p\t\tPatch AMFIInitializeLocalSigningPublicKey (iOS 15 Only)\n");
         printf("\t-h\t\tPatch is_root_hash_authentication_required_ios (iOS 16 only)\n");
         printf("\t-l\t\tPatch launchd path\n");
@@ -1252,6 +1328,10 @@ int main(int argc, char **argv) {
         if(strcmp(argv[i], "-ue") == 0) {
             printf("Kernel: Adding unencrypted data volume patch...\n");
             get_unencrypted_data_volume_patch(kernel_buf,kernel_len);
+        }
+        if(strcmp(argv[i], "-sep") == 0) {
+            printf("Kernel: Disabling AppleSEPManager::start()...\n");
+            get_sepmanager_patch(kernel_buf,kernel_len);
         }
         if(strcmp(argv[i], "-h") == 0) {
             printf("Kernel: Adding is_root_hash_authentication_required_ios patch...\n");
