@@ -203,6 +203,60 @@ int disableTouchidSensor(void* kernel_buf, size_t kernel_len) {
     return 0;
 }
 
+// cryptex validation patch (improved)
+int cryptex_patch(void* kernel_buf, size_t kernel_len) {
+    printf("%s: Entering ...\n",__FUNCTION__);
+    addr_t xref_stuff;
+    addr_t xref_stuff2;
+    addr_t xref_stuff3;
+    addr_t beg_func;
+    addr_t beg_func2;
+    addr_t beg_func3;
+    void *str_stuff;
+    void *str_stuff2;
+    void *str_stuff3;
+    printf("[*] Patching Img4DecodeGetPropertyData\n");
+    str_stuff = memmem(kernel_buf, kernel_len, "Img4DecodeGetPropertyData: [%d %s]", 34);
+    if (!str_stuff)
+    {
+        printf("[-] Failed to find Img4DecodeGetPropertyData\n");
+        return -1;
+    }
+    xref_stuff = xref64(kernel_buf, 0, kernel_len, (addr_t)GET_OFFSET(kernel_len, str_stuff));
+    beg_func = bof64(kernel_buf, 0, xref_stuff);
+    *(uint32_t *)(kernel_buf + beg_func) = 0x52800000; // mov w0, #0
+    *(uint32_t *)(kernel_buf + beg_func + 0x4) = 0xD65F03C0; // ret
+    printf("[+] Patched Img4DecodeGetPropertyData\n");
+    return 0;
+}
+
+// cryptex validation patch (improved)
+int cryptex_patch_arm64e(void* kernel_buf, size_t kernel_len) {
+    printf("%s: Entering ...\n",__FUNCTION__);
+    addr_t xref_stuff;
+    addr_t xref_stuff2;
+    addr_t xref_stuff3;
+    addr_t beg_func;
+    addr_t beg_func2;
+    addr_t beg_func3;
+    void *str_stuff;
+    void *str_stuff2;
+    void *str_stuff3;
+    printf("[*] Patching Img4DecodeGetPropertyData\n");
+    str_stuff = memmem(kernel_buf, kernel_len, "Img4DecodeGetPropertyData: [%d %s]", 34);
+    if (!str_stuff)
+    {
+        printf("[-] Failed to find Img4DecodeGetPropertyData\n");
+        return -1;
+    }
+    xref_stuff = xref64(kernel_buf, 0, kernel_len, (addr_t)GET_OFFSET(kernel_len, str_stuff));
+    beg_func = bof64(kernel_buf, 0, xref_stuff);
+    *(uint32_t *)(kernel_buf + beg_func) = 0x52800000; // mov w0, #0
+    *(uint32_t *)(kernel_buf + beg_func + 0x4) = 0xD65F0FFF; // retab
+    printf("[+] Patched Img4DecodeGetPropertyData\n");
+    return 0;
+}
+
 // based on seprmvr, thank you so much mineek, i implemented it because here are linux users. 
 int fuck_the_sep(void* kernel_buf, size_t kernel_len) {
     printf("%s: Entering ...\n",__FUNCTION__);
@@ -1148,6 +1202,7 @@ int main(int argc, char **argv) {
         printf("\t-s\t\tPatch SPUFirmwareValidation (iOS 15 Only)\n");
         printf("\t-b\t\tBypassFirmwareValidate (IOS14 TESTED), add -b13 -b15 if you want to path ios 13, 15\n");
         printf("\t-r\t\tPatch RootVPNotAuthenticatedAfterMounting (iOS 15 Only)\n");
+        printf("\t-w\t\tPatch image4 grafting+trustcache load cryptex1 (iOS 16+ Only)\n");
         printf("\t-o\t\tPatch could_not_authenticate_personalized_root_hash (iOS 15 Only)\n");
         printf("\t-e\t\tPatch root volume seal is broken (iOS 15 Only)\n");
         printf("\t-u\t\tPatch update_rootfs_rw (iOS 15 Only)\n");
@@ -1236,6 +1291,14 @@ int main(int argc, char **argv) {
         if(strcmp(argv[i], "-r") == 0) {
             printf("Kernel: Adding RootVPNotAuthenticatedAfterMounting patch...\n");
             get_RootVPNotAuthenticatedAfterMounting_patch(kernel_buf,kernel_len);
+        }
+        if(strcmp(argv[i], "-w") == 0) {
+            printf("Kernel: Adding image4 grafting+trustcache load cryptex1 patch...\n");
+            cryptex_patch(kernel_buf,kernel_len);
+        }
+        if(strcmp(argv[i], "-we") == 0) {
+            printf("Kernel: Adding image4 grafting+trustcache load cryptex1 patch (arm64e)...\n");
+            cryptex_patch_arm64e(kernel_buf,kernel_len);
         }
         if(strcmp(argv[i], "-o") == 0) {
             printf("Kernel: Adding could_not_authenticate_personalized_root_hash patch...\n");
