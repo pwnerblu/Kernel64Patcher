@@ -1202,7 +1202,8 @@ int main(int argc, char **argv) {
         printf("\t-s\t\tPatch SPUFirmwareValidation (iOS 15 Only)\n");
         printf("\t-b\t\tBypassFirmwareValidate (IOS14 TESTED), add -b13 -b15 if you want to path ios 13, 15\n");
         printf("\t-r\t\tPatch RootVPNotAuthenticatedAfterMounting (iOS 15 Only)\n");
-        printf("\t-w\t\tPatch image4 grafting+trustcache load cryptex1 (iOS 16+ Only)\n");
+        printf("\t-w\t\tPatch image4 validation callback (iOS 15+ Only)\n");
+        printf("\t-we\t\tPatch image4 validation callback for arm64e (iOS 15+ Only)\n");
         printf("\t-o\t\tPatch could_not_authenticate_personalized_root_hash (iOS 15 Only)\n");
         printf("\t-e\t\tPatch root volume seal is broken (iOS 15 Only)\n");
         printf("\t-u\t\tPatch update_rootfs_rw (iOS 15 Only)\n");
@@ -1293,11 +1294,11 @@ int main(int argc, char **argv) {
             get_RootVPNotAuthenticatedAfterMounting_patch(kernel_buf,kernel_len);
         }
         if(strcmp(argv[i], "-w") == 0) {
-            printf("Kernel: Adding image4 grafting+trustcache load cryptex1 patch...\n");
+            printf("Kernel: Adding image4 callback patch...\n");
             cryptex_patch(kernel_buf,kernel_len);
         }
         if(strcmp(argv[i], "-we") == 0) {
-            printf("Kernel: Adding image4 grafting+trustcache load cryptex1 patch (arm64e)...\n");
+            printf("Kernel: Adding image4 callback patch (arm64e)...\n");
             cryptex_patch_arm64e(kernel_buf,kernel_len);
         }
         if(strcmp(argv[i], "-o") == 0) {
