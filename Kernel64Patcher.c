@@ -1126,37 +1126,6 @@ int get_aks_patch(void* kernel_buf,size_t kernel_len) {
     *(uint32_t *)(kernel_buf + applekeystore_func_start) = 0xd2800000;      // mov w0, #0
     *(uint32_t *)(kernel_buf + applekeystore_func_start + 0x4) = 0xD65F0FFF; // retab (ARM64e)
     printf("%s: Patched AppleKeyStore function - now returns false immediately\n",__FUNCTION__);
-    // _onDeviceLockStateChanged
-    printf("%s: Patching _onDeviceLockStateChanged...\n",__FUNCTION__);
-    
-    char lockstate_str[sizeof("_onDeviceLockStateChanged")] = "_onDeviceLockStateChanged";
-    unsigned char *lockstate_loc = memmem(kernel_buf, kernel_len, lockstate_str, sizeof("_onDeviceLockStateChanged") - 1);
-    
-    if(!lockstate_loc) {
-        printf("%s: Could not find _onDeviceLockStateChanged string, continuing...\n", __FUNCTION__);
-        return 0;
-    }
-    
-    printf("%s: Found _onDeviceLockStateChanged string at %p\n", __FUNCTION__, GET_OFFSET(kernel_len, lockstate_loc));
-    
-    addr_t lockstate_ref = xref64(kernel_buf, 0, kernel_len, (addr_t)GET_OFFSET(kernel_len, lockstate_loc));
-    if(!lockstate_ref) {
-        printf("%s: Could not find _onDeviceLockStateChanged xref, continuing...\n",__FUNCTION__);
-        return 0;
-    }
-    printf("%s: Found _onDeviceLockStateChanged xref at %p\n",__FUNCTION__, (void*) lockstate_ref);
-    
-    // Find the function start for this error handler
-    addr_t lockstate_func_start = bof64(kernel_buf, 0, lockstate_ref);
-    if(!lockstate_func_start) {
-        printf("%s: Could not find _onDeviceLockStateChanged function start, continuing...\n",__FUNCTION__);
-        return 0;
-    }
-    printf("%s: Found _onDeviceLockStateChanged function start at %p\n",__FUNCTION__, (void*) lockstate_func_start);
-    printf("%s: Patching _onDeviceLockStateChanged at %p\n",__FUNCTION__, (void*) lockstate_func_start);
-    *(uint32_t *)(kernel_buf + lockstate_func_start) = 0xd2800000;      // mov w0, #0
-    *(uint32_t *)(kernel_buf + lockstate_func_start + 0x4) = 0xD65F0FFF; // retab (ARM64e)
-    printf("%s: Patched _onDeviceLockStateChanged\n",__FUNCTION__);
     return 0;
 }
 
