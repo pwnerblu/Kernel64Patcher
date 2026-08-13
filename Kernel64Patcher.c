@@ -219,8 +219,14 @@ int cryptex_patch(void* kernel_buf, size_t kernel_len) {
     str_stuff = memmem(kernel_buf, kernel_len, "Img4DecodeGetPropertyData: [%d %s]", 34);
     if (!str_stuff)
     {
-        printf("[-] Failed to find Img4DecodeGetPropertyData\n");
-        return -1;
+        printf("[-] Failed to find Img4DecodeGetPropertyData: [%%d %%s]\n");
+        printf("[*] Assuming this is a kernel for iOS 17.4 or later, using string Img4DecodeGetPropertyData: %%s: %%d instead\n");
+        str_stuff = memmem(kernel_buf, kernel_len, "Img4DecodeGetPropertyData: %s: %d", 33);
+        if (!str_stuff)
+        {
+            printf("[-] Failed to find Img4DecodeGetPropertyData: %%s: %%d\n");
+            return -1;
+        }
     }
     xref_stuff = xref64(kernel_buf, 0, kernel_len, (addr_t)GET_OFFSET(kernel_len, str_stuff));
     beg_func = bof64(kernel_buf, 0, xref_stuff);
@@ -246,8 +252,14 @@ int cryptex_patch_arm64e(void* kernel_buf, size_t kernel_len) {
     str_stuff = memmem(kernel_buf, kernel_len, "Img4DecodeGetPropertyData: [%d %s]", 34);
     if (!str_stuff)
     {
-        printf("[-] Failed to find Img4DecodeGetPropertyData\n");
-        return -1;
+        printf("[-] Failed to find Img4DecodeGetPropertyData: [%%d %%s]\n");
+        printf("[*] Assuming this is a kernel for iOS 17.4 or later, using string Img4DecodeGetPropertyData: %%s: %%d instead\n");
+        str_stuff = memmem(kernel_buf, kernel_len, "Img4DecodeGetPropertyData: %s: %d", 33);
+        if (!str_stuff)
+        {
+            printf("[-] Failed to find Img4DecodeGetPropertyData: %%s: %%d\n");
+            return -1;
+        }
     }
     xref_stuff = xref64(kernel_buf, 0, kernel_len, (addr_t)GET_OFFSET(kernel_len, str_stuff));
     beg_func = bof64(kernel_buf, 0, xref_stuff);
