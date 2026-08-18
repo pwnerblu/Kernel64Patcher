@@ -269,6 +269,28 @@ int cryptex_patch_arm64e(void* kernel_buf, size_t kernel_len) {
     return 0;
 }
 
+// cryptex validation patch (improved)
+int libimg4_patch_174(void* kernel_buf, size_t kernel_len) {
+    printf("%s: Entering ...\n",__FUNCTION__);
+    addr_t xref_stuff;
+    addr_t xref_stuff2;
+    addr_t xref_stuff3;
+    addr_t beg_func;
+    addr_t beg_func2;
+    addr_t beg_func3;
+    void *str_stuff;
+    void *str_stuff2;
+    void *str_stuff3;
+    printf("[*] Patching Img4DecodePerformTrustEvaluationWithCallbacks\n");
+    str_stuff = memmem(kernel_buf, kernel_len, "Img4DecodePerformTrustEvaluationWithCallbacks: %d", 49);
+    xref_stuff = xref64(kernel_buf, 0, kernel_len, (addr_t)GET_OFFSET(kernel_len, str_stuff));
+    beg_func = bof64(kernel_buf, 0, xref_stuff);
+    *(uint32_t *)(kernel_buf + beg_func) = 0x52800000; // mov w0, #0
+    *(uint32_t *)(kernel_buf + beg_func + 0x4) = 0xD65F0FFF; // retab
+    printf("[+] Patched Img4DecodePerformTrustEvaluationWithCallbacks\n");
+    return 0;
+}
+
 // based on seprmvr, thank you so much mineek, i implemented it because here are linux users. 
 int fuck_the_sep(void* kernel_buf, size_t kernel_len) {
     printf("%s: Entering ...\n",__FUNCTION__);
@@ -1356,6 +1378,10 @@ int main(int argc, char **argv) {
         if(strcmp(argv[i], "-we") == 0) {
             printf("Kernel: Adding image4 callback patch (arm64e)...\n");
             cryptex_patch_arm64e(kernel_buf,kernel_len);
+        }
+        if(strcmp(argv[i], "-li") == 0) {
+            printf("libimg4: doing libimage4 validations patch...\n");
+            libimg4_patch_174(kernel_buf,kernel_len);
         }
         if(strcmp(argv[i], "-o") == 0) {
             printf("Kernel: Adding could_not_authenticate_personalized_root_hash patch...\n");
