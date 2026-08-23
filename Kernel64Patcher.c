@@ -1120,7 +1120,7 @@ int is_root_hash_authentication_required_ios_patch(void* kernel_buf,size_t kerne
     printf("%s: Patching is_root_hash_authentication_required_ios at %p\n",__FUNCTION__,(void*)function);
     
     *(uint32_t *)(kernel_buf + function) = 0xD2800000;
-    *(uint32_t *)(kernel_buf + function + 0x4) = 0xD65F03C0;
+    *(uint32_t *)(kernel_buf + function + 0x4) = 0xD65F0FFF;
     return 0;
 }
 
