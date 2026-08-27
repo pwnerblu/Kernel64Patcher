@@ -269,6 +269,111 @@ int cryptex_patch_arm64e(void* kernel_buf, size_t kernel_len) {
     return 0;
 }
 
+int ios17_patch(void* kernel_buf, size_t kernel_len) {
+    printf("%s: Entering ...\n",__FUNCTION__);
+    addr_t xref_stuff;
+    addr_t beg_func;
+    addr_t mov_x2_x0;
+    addr_t bl_instr;
+    addr_t cbnz_instr;
+    void *str_stuff;
+    uint32_t instr;
+    
+    printf("[*] Patching loading identity to handle\n");
+    
+    // Find the "Loading identity" string
+    str_stuff = memmem(kernel_buf, kernel_len, "%s%s:%s%s%s%s%u:%s%u:%s Loading identity %s to handle %d%s\n", 60);
+    if(!str_stuff) {
+        printf("%s: Could not find \"AppleSEPKeyStore: Loading identity to handle\" string\n",__FUNCTION__);
+        return -1;
+    }
+    printf("%s: Found string at %p\n",__FUNCTION__, GET_OFFSET(kernel_len, str_stuff));
+    
+    // Find the xref to this string
+    xref_stuff = xref64(kernel_buf, 0, kernel_len, (addr_t)GET_OFFSET(kernel_len, str_stuff));
+    if(!xref_stuff) {
+        printf("%s: Could not find \"AppleSEPKeyStore: Loading identity to handle\" xref\n",__FUNCTION__);
+        return -1;
+    }
+    printf("%s: Found xref at %p\n",__FUNCTION__, (void*)xref_stuff);
+    
+    // Find the function start
+    beg_func = bof64(kernel_buf, 0, xref_stuff);
+    if(!beg_func) {
+        printf("%s: Could not find function start\n",__FUNCTION__);
+        return -1;
+    }
+    printf("%s: Found function start at %p\n",__FUNCTION__, (void*)beg_func);
+    
+    // Find "mov x2, x0" (encoding: 0xaa0003e2)
+    // This searches forward from function start
+    mov_x2_x0 = step64(kernel_buf, beg_func, 390, 0xaa0003e2, 0xFFFFFFFF);
+    if(!mov_x2_x0) {
+        printf("%s: Could not find \"mov x2, x0\"\n",__FUNCTION__);
+        return -1;
+    }
+    printf("%s: Found \"mov x2, x0\" at %p\n",__FUNCTION__, (void*)mov_x2_x0);
+    
+    // Find the BL instruction immediately after "mov x2, x0"
+    // BL has encoding 0x94000000 (unconditional call)
+    bl_instr = step64(kernel_buf, mov_x2_x0 + 0x4, 50, INSN_CALL);
+    if(!bl_instr) {
+        printf("%s: Could not find BL after \"mov x2, x0\"\n",__FUNCTION__);
+        return -1;
+    }
+    printf("%s: Found BL at %p\n",__FUNCTION__, (void*)bl_instr);
+    
+    // The CBNZ should be immediately after the BL (very next instruction)
+    cbnz_instr = bl_instr + 0x4;
+    instr = *(uint32_t *)(kernel_buf + cbnz_instr);
+    
+    // Verify it's a CBNZ/CBZ instruction
+    // CBNZ/CBZ mask: 0x7E000000, base: 0x34000000
+    if((instr & 0x7E000000) != 0x34000000) {
+        printf("%s: Instruction at %p is not CBNZ/CBZ (got 0x%08x)\n",__FUNCTION__, (void*)cbnz_instr, instr);
+        return -1;
+    }
+    printf("%s: Found CBNZ at %p with instruction 0x%08x\n",__FUNCTION__, (void*)cbnz_instr, instr);
+    
+    // Convert first CBNZ to CBZ by flipping bit 24 (0x01000000)
+    // CBNZ W0: 0x35000000 + immediate
+    // CBZ W0:  0x34000000 + immediate
+    // Difference is bit 24
+    uint32_t cbz_instr = instr ^ 0x01000000;
+    
+    //printf("%s: Converting first CBNZ (0x%08x) at %p to CBZ (0x%08x)\n",
+    //       __FUNCTION__, instr, (void*)cbnz_instr, cbz_instr);
+    //*(uint32_t *)(kernel_buf + cbnz_instr) = cbz_instr;
+    
+    // Find the second CBNZ after the first one (not immediate, search forward)
+    addr_t second_cbnz = step64(kernel_buf, cbnz_instr + 0x4, 100, 0x34000000, 0x7E000000);
+    if(!second_cbnz) {
+        printf("%s: Could not find second CBNZ after first\n",__FUNCTION__);
+        return -1;
+    }
+    printf("%s: Found second CBNZ at %p\n",__FUNCTION__, (void*)second_cbnz);
+    
+    // Get the second CBNZ instruction and verify it's a CBNZ/CBZ
+    uint32_t second_instr = *(uint32_t *)(kernel_buf + second_cbnz);
+    if((second_instr & 0x7E000000) != 0x34000000) {
+        printf("%s: Second instruction at %p is not CBNZ/CBZ (got 0x%08x)\n",__FUNCTION__, (void*)second_cbnz, second_instr);
+        return -1;
+    }
+    printf("%s: Found second CBNZ at %p with instruction 0x%08x\n",__FUNCTION__, (void*)second_cbnz, second_instr);
+    
+    // Convert second CBNZ to CBZ by flipping bit 24 (0x01000000)
+    uint32_t second_cbz_instr = second_instr ^ 0x01000000;
+    
+    printf("%s: Converting second CBNZ (0x%08x) at %p to CBZ (0x%08x)\n",
+           __FUNCTION__, second_instr, (void*)second_cbnz, second_cbz_instr);
+    *(uint32_t *)(kernel_buf + second_cbnz - 0x8) = 0xd503201f; // nop
+    //*(uint32_t *)(kernel_buf + second_cbnz - 0x4) = 0xd503201f; // nop
+    *(uint32_t *)(kernel_buf + second_cbnz) = second_cbz_instr;
+    
+    printf("[+] Patched loading identity to handle\n");
+    return 0;
+}
+
 // cryptex validation patch (improved)
 int libimg4_patch_174(void* kernel_buf, size_t kernel_len) {
     printf("%s: Entering ...\n",__FUNCTION__);
@@ -1356,6 +1461,10 @@ int main(int argc, char **argv) {
         if(strcmp(argv[i], "-i") == 0) {
             printf("Kernel: Adding funny patches...\n");
             get_aks_patch(kernel_buf,kernel_len);
+        }
+        if(strcmp(argv[i], "-kb") == 0) {
+            printf("Kernel: Adding iOS 17 bag patches...\n");
+            ios17_patch(kernel_buf,kernel_len);
         }
 
         if(strcmp(argv[i], "-b15") == 0) {
