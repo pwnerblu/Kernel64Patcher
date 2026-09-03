@@ -1239,8 +1239,9 @@ int get_aks_patch(void* kernel_buf,size_t kernel_len) {
     unsigned char *applekeystore_loc = memmem(kernel_buf, kernel_len, applekeystore_string, sizeof("%s%s:%s%s%s%s%u:%s%u:%s operation %s(sel: %d ret: %x%s)%s") - 1);
     
     if(!applekeystore_loc) {
-        printf("%s: Could not find AppleKeyStore operation string, continuing...\n", __FUNCTION__);
-        return 0;
+        printf("%s: Could not find AppleKeyStore operation string, trying another string...\n", __FUNCTION__);
+        char applekeystore_string2[sizeof("%s:%spid:%d,%s:%s%s%s%s%s%u:%s operation %s(sel: %d ret: %x%s)%s\n")] = "%s:%spid:%d,%s:%s%s%s%s%s%u:%s operation %s(sel: %d ret: %x%s)%s\n";
+        applekeystore_loc = memmem(kernel_buf, kernel_len, applekeystore_string2, sizeof("%s:%spid:%d,%s:%s%s%s%s%s%u:%s operation %s(sel: %d ret: %x%s)%s\n") - 1);
     }
     
     printf("%s: Found AppleKeyStore operation string at %p\n", __FUNCTION__, GET_OFFSET(kernel_len, applekeystore_loc));
