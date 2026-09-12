@@ -203,6 +203,28 @@ int disableTouchidSensor(void* kernel_buf, size_t kernel_len) {
     return 0;
 }
 
+// containermanagerd haxx
+int containermanagerd_patch(void* kernel_buf, size_t kernel_len) {
+    printf("%s: Entering ...\n",__FUNCTION__);
+    addr_t xref_stuff;
+    addr_t xref_stuff2;
+    addr_t xref_stuff3;
+    addr_t beg_func;
+    addr_t beg_func2;
+    addr_t beg_func3;
+    void *str_stuff;
+    void *str_stuff2;
+    void *str_stuff3;
+    printf("[*] Patching -[MCMFileManager createDirectoryAtURL:withIntermediateDirectories:mode:class:error:]\n");
+    str_stuff = memmem(kernel_buf, kernel_len, "-[MCMFileManager createDirectoryAtURL:withIntermediateDirectories:mode:class:error:]", 84);
+    xref_stuff = xref64(kernel_buf, 0, kernel_len, (addr_t)GET_OFFSET(kernel_len, str_stuff));
+    beg_func = bof64(kernel_buf, 0, xref_stuff);
+    *(uint32_t *)(kernel_buf + beg_func) = 0x52800000; // mov w0, #0
+    *(uint32_t *)(kernel_buf + beg_func + 0x4) = 0xD65F03C0; // ret
+    printf("[*] Patched -[MCMFileManager createDirectoryAtURL:withIntermediateDirectories:mode:class:error:]\n");
+    return 0;
+}
+
 // cryptex validation patch (improved)
 int cryptex_patch(void* kernel_buf, size_t kernel_len) {
     printf("%s: Entering ...\n",__FUNCTION__);
@@ -1532,6 +1554,10 @@ int main(int argc, char **argv) {
         if(strcmp(argv[i], "-n") == 0) {
             printf("Kernel: touch id patcher...\n");
             disableTouchidSensor(kernel_buf,kernel_len);
+        }
+        if(strcmp(argv[i], "-ct") == 0) {
+            printf("containermanagerd: SEP patcher part 1...\n");
+            containermanagerd_patch(kernel_buf,kernel_len);
         }
         if(strcmp(argv[i], "-c") == 0) {
             printf("Kernel: Adding ASLR patch...\n");
