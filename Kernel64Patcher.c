@@ -1251,43 +1251,482 @@ int is_root_hash_authentication_required_ios_patch(void* kernel_buf,size_t kerne
     return 0;
 }
 
-int get_aks_patch(void* kernel_buf,size_t kernel_len) {
-    printf("%s: Entering ...\n",__FUNCTION__);
+int get_aks_patch(void* kernel_buf, size_t kernel_len) {
+    printf("%s: Entering ...\n", __FUNCTION__);
 
-    // Patch AppleKeyStore operation failed
-    printf("%s: Patching AppleKeyStore operation failed...\n",__FUNCTION__);
-    
-    char applekeystore_string[sizeof("%s%s:%s%s%s%s%u:%s%u:%s operation %s(sel: %d ret: %x%s)%s")] = "%s%s:%s%s%s%s%u:%s%u:%s operation %s(sel: %d ret: %x%s)%s";
-    unsigned char *applekeystore_loc = memmem(kernel_buf, kernel_len, applekeystore_string, sizeof("%s%s:%s%s%s%s%u:%s%u:%s operation %s(sel: %d ret: %x%s)%s") - 1);
-    
-    if(!applekeystore_loc) {
-        printf("%s: Could not find AppleKeyStore operation string, trying another string...\n", __FUNCTION__);
-        char applekeystore_string2[sizeof("%s:%spid:%d,%s:%s%s%s%s%s%u:%s operation %s(sel: %d ret: %x%s)%s\n")] = "%s:%spid:%d,%s:%s%s%s%s%s%u:%s operation %s(sel: %d ret: %x%s)%s\n";
-        applekeystore_loc = memmem(kernel_buf, kernel_len, applekeystore_string2, sizeof("%s:%spid:%d,%s:%s%s%s%s%s%u:%s operation %s(sel: %d ret: %x%s)%s\n") - 1);
+    // ================================================================
+    // Patch AppleKeyStoreUserClient::externalMethod — selector gate
+    // ================================================================
+    //
+    // CONTEXT:
+    // iOS 17.0 tether downgrade on iPhone XR with ephemeral storage.
+    // keybagd never loads, so ALL AKS handlers (sel 1+) fail natively.
+    // This includes sel 17/35 (extended/opaque state queries that return
+    // DER-encoded device state) — their failure makes SpringBoard show
+    // a passcode screen even when sel 7 correctly reports noPin.
+    //
+    // Gate logic:
+    //   sel == 0           → native dispatch (open/init, always works)
+    //   sel == 7           → write scalarOutput[0] = 0x6, return 0
+    //   sel == 17          → write DER {ss=4, sls=3} to structureOutput, return 0
+    //   sel == 35          → write DER full state to structureOutput, return 0
+    //   all others (1+)    → return 0 (fake success, no output)
+    //
+    // Implementation:
+    //   1. Find zero-padding code cave at end of __TEXT_EXEC
+    //   2. Write gate code + DER data blobs into the cave
+    //   3. Replace pacibsp at externalMethod entry with B to the cave
+    //
+    // VALUE: 0x6 = noPin(0x2) | beenUnlocked(0x4), locked(0x1) clear.
+    //   _MKBDeviceUnlockedSinceBoot reads scalarOutput[0] bit 2.
+    //
+    // ABI (IOExternalMethodArguments, LP64 layout):
+    //   +0x48  scalarOutput         (uint64_t *)
+    //   +0x50  scalarOutputCount    (uint32_t)
+    //   +0x58  structureOutput      (void *)
+    //   +0x60  structureOutputSize  (uint64_t)
+    //
+    // DER sel 17 (21 bytes): SET { SEQUENCE { "ss", INTEGER 4 },
+    //                               SEQUENCE { "sls", INTEGER 3 } }
+    //
+    // DER sel 35 (157 bytes): SET of 14 members:
+    //   bh=-6, cxw=0, lt=0, mua=0, sas=0, sb=0, sfa=0, sgpe=0,
+    //   sgs=0, sls=3, sms=0, srcd=0, ss=6, uuid=0(16 bytes)
+    //
+    // On entry to externalMethod (ARM64e):
+    //   x0 = self, x1 = selector (w1), x2 = args
+    //
+    // bof64() returns the `sub sp` after pacibsp.
+    // ================================================================
+
+    printf("%s: Patching AppleKeyStoreUserClient externalMethod (selector gate)...\n", __FUNCTION__);
+
+    // --- Step 1: Find externalMethod via AKS operation string xref ---
+
+    char applekeystore_string[sizeof("%s%s:%s%s%s%s%u:%s%u:%s operation %s(sel: %d ret: %x%s)%s")] =
+        "%s%s:%s%s%s%s%u:%s%u:%s operation %s(sel: %d ret: %x%s)%s";
+    unsigned char *applekeystore_loc = memmem(kernel_buf, kernel_len,
+        applekeystore_string,
+        sizeof("%s%s:%s%s%s%s%u:%s%u:%s operation %s(sel: %d ret: %x%s)%s") - 1);
+
+    if (!applekeystore_loc) {
+        printf("%s: Could not find AppleKeyStore operation string, trying alternate...\n", __FUNCTION__);
+        char applekeystore_string2[sizeof("%s:%spid:%d,%s:%s%s%s%s%s%u:%s operation %s(sel: %d ret: %x%s)%s\n")] =
+            "%s:%spid:%d,%s:%s%s%s%s%s%u:%s operation %s(sel: %d ret: %x%s)%s\n";
+        applekeystore_loc = memmem(kernel_buf, kernel_len,
+            applekeystore_string2,
+            sizeof("%s:%spid:%d,%s:%s%s%s%s%s%u:%s operation %s(sel: %d ret: %x%s)%s\n") - 1);
     }
-    
-    printf("%s: Found AppleKeyStore operation string at %p\n", __FUNCTION__, GET_OFFSET(kernel_len, applekeystore_loc));
-    
-    addr_t applekeystore_ref = xref64(kernel_buf, 0, kernel_len, (addr_t)GET_OFFSET(kernel_len, applekeystore_loc));
-    if(!applekeystore_ref) {
-        printf("%s: Could not find AppleKeyStore operation xref, continuing...\n",__FUNCTION__);
+
+    if (!applekeystore_loc) {
+        printf("%s: Could not find AppleKeyStore operation string\n", __FUNCTION__);
+        return -1;
+    }
+
+    printf("%s: Found AppleKeyStore operation string at %p\n",
+        __FUNCTION__, GET_OFFSET(kernel_len, applekeystore_loc));
+
+    addr_t applekeystore_ref = xref64(kernel_buf, 0, kernel_len,
+        (addr_t)GET_OFFSET(kernel_len, applekeystore_loc));
+    if (!applekeystore_ref) {
+        printf("%s: Could not find AppleKeyStore operation xref, continuing...\n", __FUNCTION__);
         return 0;
     }
-    printf("%s: Found AppleKeyStore operation xref at %p\n",__FUNCTION__, (void*) applekeystore_ref);
-    
-    // Find the function start for this error handler
-    addr_t applekeystore_func_start = bof64(kernel_buf, 0, applekeystore_ref);
-    if(!applekeystore_func_start) {
-        printf("%s: Could not find AppleKeyStore function start, continuing...\n",__FUNCTION__);
+    printf("%s: Found AppleKeyStore operation xref at %p\n",
+        __FUNCTION__, (void*)applekeystore_ref);
+
+    addr_t func_start = bof64(kernel_buf, 0, applekeystore_ref);
+    if (!func_start) {
+        printf("%s: Could not find externalMethod function start, continuing...\n", __FUNCTION__);
         return 0;
     }
-    printf("%s: Found AppleKeyStore function start at %p\n",__FUNCTION__, (void*) applekeystore_func_start);
-    
-    // Patch to return false immediately (operation success = 0)
-    printf("%s: Patching AppleKeyStore function at %p to return false\n",__FUNCTION__, (void*) applekeystore_func_start);
-    *(uint32_t *)(kernel_buf + applekeystore_func_start) = 0xd2800000;      // mov w0, #0
-    *(uint32_t *)(kernel_buf + applekeystore_func_start + 0x4) = 0xD65F0FFF; // retab (ARM64e)
-    printf("%s: Patched AppleKeyStore function - now returns false immediately\n",__FUNCTION__);
+    printf("%s: Found externalMethod sub sp at %p\n",
+        __FUNCTION__, (void*)func_start);
+
+    addr_t pacibsp_addr = func_start - 0x4;
+    uint32_t maybe_pacibsp = *(uint32_t*)((uint8_t*)kernel_buf + pacibsp_addr);
+    if (maybe_pacibsp != 0xD503237F) {
+        printf("%s: WARNING: expected pacibsp (0xD503237F) at %p, got 0x%08x\n",
+            __FUNCTION__, (void*)pacibsp_addr, maybe_pacibsp);
+        return -1;
+    }
+    printf("%s: Confirmed pacibsp at %p\n", __FUNCTION__, (void*)pacibsp_addr);
+
+    // --- Step 2: Find code cave at end of __TEXT_EXEC ---
+    //
+    // Walk Mach-O load commands manually (no mach-o/loader.h dependency).
+    // Mach-O 64 header: 32 bytes. Load command: cmd(4) cmdsize(4).
+    // LC_SEGMENT_64 = 0x19: segname(+8,16) fileoff(+40,8) filesize(+48,8)
+
+    printf("%s: Searching for code cave in __TEXT_EXEC padding...\n", __FUNCTION__);
+
+    uint8_t *buf = (uint8_t*)kernel_buf;
+    uint32_t ncmds  = *(uint32_t*)(buf + 16);
+    uint32_t lc_off = 32;
+
+    uint64_t text_exec_fileoff  = 0;
+    uint64_t text_exec_filesize = 0;
+    int found_text_exec = 0;
+
+    for (uint32_t i = 0; i < ncmds; i++) {
+        uint32_t cmd     = *(uint32_t*)(buf + lc_off);
+        uint32_t cmdsize = *(uint32_t*)(buf + lc_off + 4);
+
+        if (cmd == 0x19) {  // LC_SEGMENT_64
+            char *segname = (char*)(buf + lc_off + 8);
+            if (strncmp(segname, "__TEXT_EXEC", 10) == 0) {
+                text_exec_fileoff  = *(uint64_t*)(buf + lc_off + 40);
+                text_exec_filesize = *(uint64_t*)(buf + lc_off + 48);
+                found_text_exec = 1;
+                printf("%s: __TEXT_EXEC: fileoff=0x%llx, filesize=0x%llx\n",
+                    __FUNCTION__,
+                    (unsigned long long)text_exec_fileoff,
+                    (unsigned long long)text_exec_filesize);
+                break;
+            }
+        }
+
+        if (cmdsize == 0) break;
+        lc_off += cmdsize;
+    }
+
+    if (!found_text_exec) {
+        printf("%s: Could not find __TEXT_EXEC segment\n", __FUNCTION__);
+        return -1;
+    }
+
+    // Scan backwards from end of __TEXT_EXEC to find last non-zero word
+    uint64_t text_exec_end = text_exec_fileoff + text_exec_filesize;
+    addr_t cave_addr = 0;
+
+    for (uint64_t off = text_exec_end - 4; off >= text_exec_fileoff; off -= 4) {
+        uint32_t w = *(uint32_t*)(buf + off);
+        if (w != 0) {
+            cave_addr = (addr_t)(off + 4);
+            break;
+        }
+    }
+
+    if (!cave_addr) {
+        printf("%s: Could not find code cave\n", __FUNCTION__);
+        return -1;
+    }
+
+    uint64_t cave_size = text_exec_end - cave_addr;
+    printf("%s: Code cave at file offset 0x%llx (%llu bytes available)\n",
+        __FUNCTION__, (unsigned long long)cave_addr, (unsigned long long)cave_size);
+
+    // Total cave usage: 46 instructions (184 bytes) + 21 bytes DER17 + 157 bytes DER35 = 362 bytes
+    if (cave_size < 362) {
+        printf("%s: Code cave too small (%llu bytes, need 362)\n",
+            __FUNCTION__, (unsigned long long)cave_size);
+        return -1;
+    }
+
+    // Verify branch distances within +/-128MB
+    int64_t fwd_distance  = (int64_t)cave_addr - (int64_t)pacibsp_addr;
+    int64_t back_distance = (int64_t)func_start - (int64_t)(cave_addr + 0xB4);
+
+    if (fwd_distance < -(1 << 27) || fwd_distance >= (1 << 27) ||
+        back_distance < -(1 << 27) || back_distance >= (1 << 27)) {
+        printf("%s: Code cave too far for B instruction\n", __FUNCTION__);
+        return -1;
+    }
+
+    // --- Step 3: Write gate code + DER data into code cave ---
+    //
+    // Gate layout (46 instructions = 184 bytes code + 178 bytes DER data):
+    //
+    //   +0x000  pacibsp                        ; restore PAC we overwrote
+    //   +0x004  cbz w1, native (+0x0B4)       ; sel 0 → native dispatch
+    //   +0x008  cmp w1, #7                    ; sel == 7?
+    //   +0x00C  b.eq sel7 (+0x028)            ; yes → scalar lock state shim
+    //   +0x010  cmp w1, #17                   ; sel == 17?
+    //   +0x014  b.eq sel17 (+0x048)           ; yes → DER state shim
+    //   +0x018  cmp w1, #35                   ; sel == 35?
+    //   +0x01C  b.eq sel35 (+0x070)           ; yes → DER full state shim
+    //   +0x020  mov x0, #0                    ; all other sel: fake success
+    //   +0x024  retab                         ;
+    //
+    //   sel7: (+0x028)
+    //   +0x028  cbz x2, ret0                  ; args NULL → succeed
+    //   +0x02C  ldr x8, [x2, #0x48]           ; scalarOutput ptr
+    //   +0x030  cbz x8, ret0                  ; NULL → skip
+    //   +0x034  ldr w9, [x2, #0x50]           ; scalarOutputCount
+    //   +0x038  cbz w9, ret0                  ; 0 → skip
+    //   +0x03C  mov x10, #6                   ; noPin | beenUnlocked
+    //   +0x040  str x10, [x8]                 ; scalarOutput[0] = 0x6
+    //   +0x044  b ret0                        ;
+    //
+    //   sel17: (+0x048)
+    //   +0x048  cbz x2, ret0                  ; args NULL → succeed
+    //   +0x04C  ldr x8, [x2, #0x58]           ; structureOutput ptr
+    //   +0x050  cbz x8, ret0                  ; NULL → skip
+    //   +0x054  ldr x9, [x2, #0x60]           ; structureOutputSize (64-bit)
+    //   +0x058  cmp x9, #21                   ; need 21 bytes
+    //   +0x05C  b.lo ret0                     ; too small → skip
+    //   +0x060  adr x10, der17_data (+0x0B8)  ; PC-relative addr of DER blob
+    //   +0x064  mov x11, #21                  ; byte count
+    //   +0x068  mov x13, x11                  ; save size for store
+    //   +0x06C  b copy_loop (+0x098)          ; shared copy routine
+    //
+    //   sel35: (+0x070)
+    //   +0x070  cbz x2, ret0                  ; args NULL → succeed
+    //   +0x074  ldr x8, [x2, #0x58]           ; structureOutput ptr
+    //   +0x078  cbz x8, ret0                  ; NULL → skip
+    //   +0x07C  ldr x9, [x2, #0x60]           ; structureOutputSize (64-bit)
+    //   +0x080  cmp x9, #157                  ; need 157 bytes (0x9D)
+    //   +0x084  b.lo ret0                     ; too small → skip
+    //   +0x088  adr x10, der35_data (+0x0CD)  ; PC-relative addr of DER blob
+    //   +0x08C  mov x11, #157                 ; byte count
+    //   +0x090  mov x13, x11                  ; save size for store
+    //   +0x094  b copy_loop (+0x098)          ;
+    //
+    //   copy_loop: (+0x098)
+    //   +0x098  ldrb w12, [x10], #1           ; load DER byte, post-increment
+    //   +0x09C  strb w12, [x8], #1            ; store to structureOutput
+    //   +0x0A0  subs x11, x11, #1             ; decrement counter
+    //   +0x0A4  b.ne copy_loop               ; loop until done
+    //   +0x0A8  str x13, [x2, #0x60]          ; update structureOutputSize
+    //
+    //   ret0: (+0x0AC)
+    //   +0x0AC  mov x0, #0                    ; kIOReturnSuccess
+    //   +0x0B0  retab                         ;
+    //
+    //   native: (+0x0B4)
+    //   +0x0B4  B sub_sp                      ; → externalMethod prologue
+    //
+    //   der17_data: (+0x0B8)  21 bytes of DER for sel 17
+    //   der35_data: (+0x0CD)  157 bytes of DER for sel 35
+    //
+
+    printf("%s: Writing gate code at 0x%llx...\n",
+        __FUNCTION__, (unsigned long long)cave_addr);
+
+    uint32_t *cave = (uint32_t*)(buf + cave_addr);
+
+    // +0x000: pacibsp
+    cave[0]  = 0xD503237F;
+
+    // +0x004: cbz w1, native (+0x0B4); offset=0xB0; imm19=0xB0/4=44
+    cave[1]  = 0x34000581;
+
+    // +0x008: cmp w1, #7
+    cave[2]  = 0x71001C3F;
+
+    // +0x00C: b.eq sel7 (+0x028); offset=0x1C; imm19=7
+    cave[3]  = 0x540000E0;
+
+    // +0x010: cmp w1, #17
+    cave[4]  = 0x7100443F;
+
+    // +0x014: b.eq sel17 (+0x048); offset=0x34; imm19=13
+    cave[5]  = 0x540001A0;
+
+    // +0x018: cmp w1, #35
+    cave[6]  = 0x71008C3F;
+
+    // +0x01C: b.eq sel35 (+0x070); offset=0x54; imm19=21
+    cave[7]  = 0x540002A0;
+
+    // +0x020: mov x0, #0 — all other selectors: fake success
+    cave[8]  = 0xD2800000;
+
+    // +0x024: retab
+    cave[9]  = 0xD65F0FFF;
+
+    // --- sel7: scalar lock state shim ---
+
+    // +0x028: cbz x2, ret0 (+0x0AC); offset=0x84; imm19=33
+    cave[10] = 0xB4000422;
+
+    // +0x02C: ldr x8, [x2, #0x48] — scalarOutput
+    cave[11] = 0xF9402448;
+
+    // +0x030: cbz x8, ret0 (+0x0AC); offset=0x7C; imm19=31
+    cave[12] = 0xB40003E8;
+
+    // +0x034: ldr w9, [x2, #0x50] — scalarOutputCount
+    cave[13] = 0xB9405049;
+
+    // +0x038: cbz w9, ret0 (+0x0AC); offset=0x74; imm19=29
+    cave[14] = 0x340003A9;
+
+    // +0x03C: mov x10, #6 — noPin | beenUnlocked
+    cave[15] = 0xD28000CA;
+
+    // +0x040: str x10, [x8] — scalarOutput[0] = 0x6
+    cave[16] = 0xF900010A;
+
+    // +0x044: b ret0 (+0x0AC); offset=0x68; imm26=26
+    cave[17] = 0x1400001A;
+
+    // --- sel17: DER state shim (ss=4, sls=3) ---
+
+    // +0x048: cbz x2, ret0 (+0x0AC); offset=0x64; imm19=25
+    cave[18] = 0xB4000322;
+
+    // +0x04C: ldr x8, [x2, #0x58] — structureOutput ptr
+    cave[19] = 0xF9402C48;
+
+    // +0x050: cbz x8, ret0 (+0x0AC); offset=0x5C; imm19=23
+    cave[20] = 0xB40002E8;
+
+    // +0x054: ldr x9, [x2, #0x60] — structureOutputSize (64-bit)
+    cave[21] = 0xF9403049;
+
+    // +0x058: cmp x9, #21 — need 21 bytes for sel 17 DER
+    cave[22] = 0xF100553F;
+
+    // +0x05C: b.lo ret0 (+0x0AC); offset=0x50; imm19=20; cond=3(LO)
+    cave[23] = 0x54000283;
+
+    // +0x060: adr x10, der17_data (+0x0B8); delta=0x58=88
+    cave[24] = 0x100002CA;
+
+    // +0x064: mov x11, #21
+    cave[25] = 0xD28002AB;
+
+    // +0x068: mov x13, x11
+    cave[26] = 0xAA0B03ED;
+
+    // +0x06C: b copy_loop (+0x098); offset=0x2C; imm26=11
+    cave[27] = 0x1400000B;
+
+    // --- sel35: DER full state shim ---
+
+    // +0x070: cbz x2, ret0 (+0x0AC); offset=0x3C; imm19=15
+    cave[28] = 0xB40001E2;
+
+    // +0x074: ldr x8, [x2, #0x58] — structureOutput ptr
+    cave[29] = 0xF9402C48;
+
+    // +0x078: cbz x8, ret0 (+0x0AC); offset=0x34; imm19=13
+    cave[30] = 0xB40001A8;
+
+    // +0x07C: ldr x9, [x2, #0x60] — structureOutputSize (64-bit)
+    cave[31] = 0xF9403049;
+
+    // +0x080: cmp x9, #157 — need 157 bytes (0x9D) for sel 35 DER
+    cave[32] = 0xF102753F;
+
+    // +0x084: b.lo ret0 (+0x0AC); offset=0x28; imm19=10; cond=3(LO)
+    cave[33] = 0x54000143;
+
+    // +0x088: adr x10, der35_data (+0x0CD); delta=0x45=69
+    cave[34] = 0x3000022A;
+
+    // +0x08C: mov x11, #157
+    cave[35] = 0xD28013AB;
+
+    // +0x090: mov x13, x11
+    cave[36] = 0xAA0B03ED;
+
+    // +0x094: b copy_loop (+0x098); offset=0x04; imm26=1
+    cave[37] = 0x14000001;
+
+    // --- copy_loop: byte-copy DER into structureOutput ---
+
+    // +0x098: ldrb w12, [x10], #1
+    cave[38] = 0x3840154C;
+
+    // +0x09C: strb w12, [x8], #1
+    cave[39] = 0x3800150C;
+
+    // +0x0A0: subs x11, x11, #1 (64-bit)
+    cave[40] = 0xF100056B;
+
+    // +0x0A4: b.ne copy_loop (+0x098); offset=-0x0C; cond=1(NE)
+    cave[41] = 0x54FFFFA1;
+
+    // +0x0A8: str x13, [x2, #0x60] — update structureOutputSize
+    cave[42] = 0xF900304D;
+
+    // --- ret0: return kIOReturnSuccess ---
+
+    // +0x0AC: mov x0, #0
+    cave[43] = 0xD2800000;
+
+    // +0x0B0: retab
+    cave[44] = 0xD65F0FFF;
+
+    // --- native: branch to original externalMethod prologue ---
+
+    // +0x0B4: B func_start (sub sp)
+    {
+        int64_t offset = (int64_t)func_start - (int64_t)(cave_addr + 0xB4);
+        cave[45] = 0x14000000 | (((uint32_t)(offset >> 2)) & 0x3FFFFFF);
+    }
+
+    printf("%s: Gate code written (46 instructions, 184 bytes)\n", __FUNCTION__);
+
+    // --- Step 3b: Write DER data blobs after the code ---
+    //
+    // der17_data at cave+0x0B8: 21 bytes — SET { SEQUENCE{"ss",4}, SEQUENCE{"sls",3} }
+    // der35_data at cave+0x0CD: 157 bytes — SET of 14 members (full AKS state)
+
+    uint8_t *cave_bytes = (uint8_t*)(buf + cave_addr);
+
+    // Sel 17 DER: {ss=4, sls=3} — 21 bytes
+    static const uint8_t der17[21] = {
+        0x31, 0x13,                                     // SET, length 19
+        0x30, 0x07, 0x0C, 0x02, 0x73, 0x73, 0x02, 0x01, 0x04,  // SEQUENCE{"ss", INTEGER 4}
+        0x30, 0x08, 0x0C, 0x03, 0x73, 0x6C, 0x73, 0x02, 0x01, 0x03  // SEQUENCE{"sls", INTEGER 3}
+    };
+    memcpy(cave_bytes + 0xB8, der17, 21);
+
+    printf("%s: Wrote sel 17 DER data at cave+0xB8 (21 bytes, ss=4 sls=3)\n", __FUNCTION__);
+
+    // Sel 35 DER: full 14-member state — 157 bytes (DER SET, sorted by encoding)
+    // Members (sorted): bh=-6, lt=0, sb=0, ss=6, cxw=0, mua=0, sas=0, sfa=0,
+    //                    sgs=0, sls=3, sms=0, sgpe=0, srcd=0, uuid=zeros(16)
+    static const uint8_t der35[157] = {
+        0x31, 0x81, 0x9A,                               // SET, length 154 (long form)
+        0x30, 0x07, 0x0C, 0x02, 0x62, 0x68, 0x02, 0x01, 0xFA,  // bh = -6
+        0x30, 0x07, 0x0C, 0x02, 0x6C, 0x74, 0x02, 0x01, 0x00,  // lt = 0
+        0x30, 0x07, 0x0C, 0x02, 0x73, 0x62, 0x02, 0x01, 0x00,  // sb = 0
+        0x30, 0x07, 0x0C, 0x02, 0x73, 0x73, 0x02, 0x01, 0x06,  // ss = 6
+        0x30, 0x08, 0x0C, 0x03, 0x63, 0x78, 0x77, 0x02, 0x01, 0x00,  // cxw = 0
+        0x30, 0x08, 0x0C, 0x03, 0x6D, 0x75, 0x61, 0x02, 0x01, 0x00,  // mua = 0
+        0x30, 0x08, 0x0C, 0x03, 0x73, 0x61, 0x73, 0x02, 0x01, 0x00,  // sas = 0
+        0x30, 0x08, 0x0C, 0x03, 0x73, 0x66, 0x61, 0x02, 0x01, 0x00,  // sfa = 0
+        0x30, 0x08, 0x0C, 0x03, 0x73, 0x67, 0x73, 0x02, 0x01, 0x00,  // sgs = 0
+        0x30, 0x08, 0x0C, 0x03, 0x73, 0x6C, 0x73, 0x02, 0x01, 0x03,  // sls = 3
+        0x30, 0x08, 0x0C, 0x03, 0x73, 0x6D, 0x73, 0x02, 0x01, 0x00,  // sms = 0
+        0x30, 0x09, 0x0C, 0x04, 0x73, 0x67, 0x70, 0x65, 0x02, 0x01, 0x00,  // sgpe = 0
+        0x30, 0x09, 0x0C, 0x04, 0x73, 0x72, 0x63, 0x64, 0x02, 0x01, 0x00,  // srcd = 0
+        0x30, 0x18, 0x0C, 0x04, 0x75, 0x75, 0x69, 0x64, 0x04, 0x10,        // uuid = zeros
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+    memcpy(cave_bytes + 0xCD, der35, 157);
+
+    printf("%s: Wrote sel 35 DER data at cave+0xCD (157 bytes, ss=6 sls=3 bh=-6)\n", __FUNCTION__);
+
+    // --- Step 4: Replace pacibsp with B to gate ---
+
+    {
+        int64_t offset = (int64_t)cave_addr - (int64_t)pacibsp_addr;
+        uint32_t b_to_cave = 0x14000000 | (((uint32_t)(offset >> 2)) & 0x3FFFFFF);
+
+        *(uint32_t*)(buf + pacibsp_addr) = b_to_cave;
+
+        printf("%s: Replaced pacibsp at 0x%llx with B 0x%llx (insn: 0x%08x)\n",
+            __FUNCTION__,
+            (unsigned long long)pacibsp_addr,
+            (unsigned long long)cave_addr,
+            b_to_cave);
+    }
+
+    printf("%s: === Selector gate patch applied ===\n", __FUNCTION__);
+    printf("%s:   Sel 0       → native dispatch\n", __FUNCTION__);
+    printf("%s:   Sel 7       → scalarOutput[0]=0x6, return 0\n", __FUNCTION__);
+    printf("%s:   Sel 17      → DER {ss=4, sls=3} → structureOutput (21 bytes)\n", __FUNCTION__);
+    printf("%s:   Sel 35      → DER full state → structureOutput (157 bytes)\n", __FUNCTION__);
+    printf("%s:   All others  → return 0 (fake success)\n", __FUNCTION__);
+    printf("%s:   Gate at     → 0x%llx (362 bytes: 184 code + 178 data)\n",
+        __FUNCTION__, (unsigned long long)cave_addr);
+
     return 0;
 }
 
