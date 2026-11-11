@@ -1,18 +1,12 @@
-CC		= gcc
-CFLAGS	=
-VERSION = $(shell git rev-parse HEAD | tr -d '\n')-$(shell git rev-list --count HEAD | tr -d '\n')
+CC = gcc
+CFLAGS = -arch x86_64 -arch arm64 -O2
+TARGET = MobileActivationPatcher
+SOURCES = MobileActivationPatcher.c
 
-UNAME  := $(shell uname)
-ifeq ($(UNAME), Darwin)
-ARCH	= -arch x86_64 -arch arm64
-else
-ARCH	=
-endif
+all: $(TARGET)
 
-.PHONY: all clean
+$(TARGET): $(SOURCES)
+	$(CC) $(CFLAGS) -o $(TARGET) $(SOURCES)
 
-all:
-	$(CC) Kernel64Patcher.c $(ARCH) $(CFLAGS) -DVERSION=\"$(VERSION)\" -o Kernel64Patcher
-	
 clean:
-	-$(RM) Kernel64Patcher
+	rm -f $(TARGET)
